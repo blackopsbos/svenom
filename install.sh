@@ -1,14 +1,8 @@
 #!/bin/bash
-# install.sh - One-liner server installer for SVENOM
+# install-attacker.sh - Instal vghost untuk attacker (sekali saja)
 set -e
 
-DOMAIN=${1:-""}
-PORT=${2:-443}
-HTTP_PORT=${3:-8080}
-
-echo "[*] Downloading SVENOM installer..."
-curl -sSL "https://github.com/blackopsbos/svenom/releases/latest/download/svenom" -o /tmp/svenom
-chmod +x /tmp/svenom
-
-echo "[*] Running installer..."
-sudo /tmp/svenom -i ${DOMAIN:+-d "$DOMAIN"} -port "$PORT" -http "$HTTP_PORT"
+echo "[*] Downloading vghost binary..."
+curl -fsSL "https://github.com/blackopsbos/svenom/releases/latest/download/vghost" -o /usr/local/bin/vghost
+chmod +x /usr/local/bin/vghost
+echo "[+] vghost terinstal. Gunakan: vghost --Sk <secret> -d <domain> --connect"
